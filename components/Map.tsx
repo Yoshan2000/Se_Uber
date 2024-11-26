@@ -12,13 +12,12 @@ import MapViewDirections from "react-native-maps-directions";
 import * as Location from "expo-location";
 
 import { icons } from "@/constants";
-import { useFetch } from "@/lib/fetch";
+import { useDriverStore, useLocationStore } from "@/store";
 import {
   calculateDriverTimes,
   calculateRegion,
   generateMarkersFromData,
 } from "@/lib/map";
-import { useDriverStore, useLocationStore } from "@/store";
 import { Driver, MarkerData } from "@/types/type";
 
 const directionsAPI = process.env.EXPO_PUBLIC_GOOGLE_API_KEY;
@@ -31,11 +30,12 @@ const Map = () => {
     destinationLatitude,
     destinationLongitude,
   } = useLocationStore();
-  const { selectedDriver, setDrivers } = useDriverStore();
+  const { selectedDriver, setDrivers } = useDriverStore(); // Access store for drivers
 
-  const { data: drivers, loading, error } = useFetch<Driver[]>("/(api)/driver");
   const [markers, setMarkers] = useState<MarkerData[]>([]);
-  const [distance, setDistance] = useState(0); // default to 1km radius
+  const [distance, setDistance] = useState(1); // default to 1 km
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Real-time location tracking
   useEffect(() => {
@@ -65,19 +65,47 @@ const Map = () => {
     startLocationTracking();
   }, [setUserLocation]);
 
+  // Fetch drivers based on radius and update store
   useEffect(() => {
-    if (Array.isArray(drivers) && userLatitude && userLongitude) {
-      const newMarkers = generateMarkersFromData({
-        data: drivers,
-        userLatitude,
-        userLongitude,
-        maxDistance: distance, // Use user-defined distance
-      });
+    if (!userLatitude || !userLongitude) return;
 
-      setMarkers(newMarkers);
-    }
-  }, [drivers, userLatitude, userLongitude, distance]); // re-run when distance changes
+    const fetchDrivers = async () => {
+      setLoading(true);
+      setError(null);
 
+      try {
+        const response = await fetch(
+          `/(api)/driver?radius=${distance}`, // Fetch drivers based on radius
+        );
+        const result = await response.json();
+
+        if (response.ok) {
+          const newMarkers = generateMarkersFromData({
+            data: result.data,
+            userLatitude,
+            userLongitude,
+            maxDistance: distance,
+          });
+
+          setMarkers(newMarkers);
+
+          // Update driver store with filtered drivers
+          setDrivers(newMarkers); // Store only drivers visible on the map
+        } else {
+          throw new Error(result.error || "Failed to fetch drivers");
+        }
+      } catch (err) {
+        console.error("Error fetching drivers:", err);
+        setError("Failed to load drivers. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDrivers();
+  }, [distance, userLatitude, userLongitude, setDrivers]); // Trigger on radius change
+
+  // Update driver times when markers change
   useEffect(() => {
     if (
       markers.length > 0 &&
@@ -94,7 +122,7 @@ const Map = () => {
         setDrivers(drivers as MarkerData[]);
       });
     }
-  }, [markers, destinationLatitude, destinationLongitude]);
+  }, [markers, destinationLatitude, destinationLongitude, selectedDriver]);
 
   const region = calculateRegion({
     userLatitude,
@@ -113,7 +141,7 @@ const Map = () => {
   if (error)
     return (
       <View style={styles.centered}>
-        <Text>Error: {error}</Text>
+        <Text>{error}</Text>
       </View>
     );
 
@@ -130,15 +158,31 @@ const Map = () => {
         <Button
           title="Enter the range to see the drivers"
           onPress={() => {
-            // Trigger an update to the driver markers based on new distance
-            if (Array.isArray(drivers) && userLatitude && userLongitude) {
-              const updatedMarkers = generateMarkersFromData({
-                data: drivers,
-                userLatitude,
-                userLongitude,
-                maxDistance: distance, // Update with new distance
-              });
-              setMarkers(updatedMarkers);
+            // Trigger fetch when button is pressed
+            if (userLatitude && userLongitude) {
+              const fetchDrivers = async () => {
+                setLoading(true);
+                try {
+                  const response = await fetch(
+                    `/(api)/driver?radius=${distance}`,
+                  );
+                  const result = await response.json();
+                  const updatedMarkers = generateMarkersFromData({
+                    data: result.data,
+                    userLatitude,
+                    userLongitude,
+                    maxDistance: distance,
+                  });
+
+                  setMarkers(updatedMarkers);
+                  setDrivers(updatedMarkers); // Update driver store
+                } catch (err) {
+                  setError("Failed to load drivers.");
+                } finally {
+                  setLoading(false);
+                }
+              };
+              fetchDrivers();
             }
           }}
           color="#4A90E2"
@@ -154,7 +198,7 @@ const Map = () => {
         followsUserLocation={true}
         userInterfaceStyle="light"
       >
-        {markers.map((marker, index) => (
+        {markers.map((marker) => (
           <Marker
             key={marker.id}
             coordinate={{

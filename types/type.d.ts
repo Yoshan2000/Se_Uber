@@ -137,3 +137,11 @@ declare interface DriverCardProps {
   selected: number;
   setSelected: () => void;
 }
+export interface User {
+  name: string;
+  surname: string;
+  username: string;
+  email: string;
+  phone: string;
+  clerkId: string;
+}
